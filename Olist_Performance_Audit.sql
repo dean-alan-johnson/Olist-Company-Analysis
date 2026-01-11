@@ -5,7 +5,7 @@ USE Olist;
 GO
 
 - 1. MONTHLY REVENUE & MOM GROWTH
-- Aggregates price to capture total revenue; NULLIF prevents division by zero in growth calculation.
+- Supports the $1M monthly GMV breakthrough and 20.6% July retraction analysis.
 WITH MonthlyRevenue AS (
     SELECT
         YEAR(o.order_delivered_customer_date) AS year,
@@ -29,7 +29,7 @@ ORDER BY year, month;
 
 
 - 2. ORDER VOLUME & AOV (MASS-MARKET PIVOT)
-- Uses DISTINCT order_id to prevent "fan-out" from multi-item orders during volume counting.
+- Validates the strategic shift from $189 to $118 AOV that acted as a volume catalyst.
 WITH MonthlyMetrics AS (
     SELECT
         YEAR(o.order_purchase_timestamp) AS year,
@@ -50,8 +50,34 @@ FROM MonthlyMetrics
 ORDER BY year, month;
 
 
-- 3. CATEGORY MARKET SHARE (TOP 5 VS OTHERS)
-- Evaluates the shifting dominance of anchor categories over time.
+- 3. TOP 5 CATEGORY MONTHLY GMV (RAW REVENUE)
+- Provides the specific dollar values for the "Health & Beauty" surge vs "Tech" slide.
+WITH Top5Categories AS (
+    SELECT TOP 5 p.product_category_name
+    FROM olist_order_items oi
+    JOIN olist_products p ON oi.product_id = p.product_id
+    JOIN olist_orders o ON oi.order_id = o.order_id
+    WHERE o.order_status = 'delivered' AND o.order_delivered_customer_date < '2018-09-01'
+    GROUP BY p.product_category_name
+    ORDER BY SUM(oi.price) DESC
+)
+SELECT 
+    FORMAT(DATEFROMPARTS(YEAR(o.order_delivered_customer_date), MONTH(o.order_delivered_customer_date), 1), 'MM/yyyy') AS [Month],
+    t.translated_name AS [Category],
+    CAST(SUM(oi.price) AS DECIMAL(10,2)) AS [Monthly_Product_Value]
+FROM olist_order_items oi
+JOIN olist_orders o ON oi.order_id = o.order_id
+JOIN olist_products p ON oi.product_id = p.product_id
+JOIN product_category_name_translation t ON p.product_category_name = t.original_name
+WHERE p.product_category_name IN (SELECT product_category_name FROM Top5Categories)
+  AND o.order_status = 'delivered'
+  AND o.order_delivered_customer_date < '2018-09-01'
+GROUP BY YEAR(o.order_delivered_customer_date), MONTH(o.order_delivered_customer_date), t.translated_name
+ORDER BY YEAR(o.order_delivered_customer_date), MONTH(o.order_delivered_customer_date), [Monthly_Product_Value] DESC;
+
+
+- 4. CATEGORY MARKET SHARE % (FLIGHT TO QUALITY)
+- Tracks the "Others" category squeeze and the resilience of anchor verticals.
 WITH CategoryPrices AS (
     SELECT 
         oi.order_id, o.order_purchase_timestamp,
@@ -84,36 +110,36 @@ FROM MonthlyAggregated
 ORDER BY CAST(m_date AS DATE), market_share_pct DESC;
 
 
-- 4. SENTIMENT VARIANCE (QUALITY VS VOLUME)
-- Measures the variance between specific product categories and the store-wide average rating.
+- 5. SENTIMENT VARIANCE (QUALITY VS VOLUME)
+- Calculates the % variance to identify "Quality Crises" (e.g., the 15.4% tech dip).
 WITH GlobalAvg AS (
     SELECT 
-        FORMAT(DATEFROMPARTS(YEAR(review_creation_date), MONTH(review_creation_date), 1), 'MM/dd/yyyy') AS f_month,
+        FORMAT(review_creation_date, 'MM/yyyy') AS f_month,
         AVG(CAST(review_score AS FLOAT)) AS avg_score
-    FROM olist_order_reviews GROUP BY YEAR(review_creation_date), MONTH(review_creation_date)
+    FROM olist_order_reviews GROUP BY FORMAT(review_creation_date, 'MM/yyyy')
 ),
 CategoryAvg AS (
     SELECT 
-        FORMAT(DATEFROMPARTS(YEAR(r.review_creation_date), MONTH(r.review_creation_date), 1), 'MM/dd/yyyy') AS f_month,
+        FORMAT(r.review_creation_date, 'MM/yyyy') AS f_month,
         COALESCE(t.translated_name, p.product_category_name) AS cat_name,
         AVG(CAST(r.review_score AS FLOAT)) AS cat_score
     FROM olist_order_reviews r
     JOIN olist_order_items oi ON r.order_id = oi.order_id
     JOIN olist_products p ON oi.product_id = p.product_id
     LEFT JOIN product_category_name_translation t ON p.product_category_name = t.original_name
-    GROUP BY YEAR(r.review_creation_date), MONTH(r.review_creation_date), COALESCE(t.translated_name, p.product_category_name)
+    GROUP BY FORMAT(r.review_creation_date, 'MM/yyyy'), COALESCE(t.translated_name, p.product_category_name)
 )
 SELECT 
     c.f_month, c.cat_name, ROUND(c.cat_score, 2) AS actual_rating,
-    ROUND(c.cat_score - g.avg_score, 2) AS variance_from_avg
+    ROUND(((c.cat_score - g.avg_score) / NULLIF(g.avg_score, 0)) * 100, 2) AS variance_pct_from_avg
 FROM CategoryAvg c
 JOIN GlobalAvg g ON c.f_month = g.f_month
 WHERE c.cat_name IN ('health_beauty', 'watches_gifts', 'bed_bath_table', 'sports_leisure', 'computers_accessories')
-ORDER BY CAST(c.f_month AS DATE) DESC;
+ORDER BY CAST(CONCAT('01/', c.f_month) AS DATE) DESC;
 
 
-- 5. LOGISTICS RELAY (THE 25/75 SPLIT)
-- Analyzes handling vs transit efficiency to identify structural bottlenecks.
+- 6. LOGISTICS RELAY (THE 25/75 SPLIT)
+- Defines the 9-day carrier transit bottleneck as the "Iron Ceiling" of fulfillment.
 SELECT 
     CAST(AVG(DATEDIFF(day, order_purchase_timestamp, order_delivered_carrier_date) * 1.0) AS DECIMAL(10,1)) AS seller_handling_days,
     CAST(AVG(DATEDIFF(day, order_delivered_carrier_date, order_delivered_customer_date) * 1.0) AS DECIMAL(10,1)) AS carrier_transit_days,
@@ -124,8 +150,8 @@ WHERE order_status = 'delivered'
   AND order_delivered_customer_date >= order_delivered_carrier_date;
 
 
-- 6. FREIGHT RATIO ("LOGISTICS TAX")
-- Highlights how shipping costs impact the competitiveness of different product verticals.
+- 7. FREIGHT RATIO ("LOGISTICS TAX")
+- Highlights shipping friction (e.g., the 16.5% burden stalling Home Linens growth).
 SELECT 
     COALESCE(t.translated_name, p.product_category_name) AS category,
     CAST(AVG(oi.price) AS DECIMAL(10,2)) AS avg_item_price,
