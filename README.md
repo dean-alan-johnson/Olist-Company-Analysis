@@ -1,1 +1,1 @@
-# Olist-Company-Analysis
+Reporting to the Head of Operations, I conducted a comprehensive performance audit of Olist, a leading Brazilian e-commerce integrator. This audit evaluates the company’s transition from a startup pilot to an enterprise-level marketplace, processing over $15M in Gross Merchandise Value (GMV).
